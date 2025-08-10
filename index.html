@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>Worträtsel-Solver (Galerie ODER Kamera, präzise OCR)</title>
+<title>Worträtsel-Solver (DEU, 1 Worker, 80%-Zellen)</title>
 <style>
   :root{--bg:#0b1220;--fg:#e5e7eb;--muted:#9aa4b2;--acc:#22d3ee;--ok:#a7f3d0;--warn:#fbbf24;--mono:ui-monospace,Menlo,Consolas,monospace;}
   html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);}
@@ -29,12 +29,17 @@
   pre{white-space:pre-wrap;word-break:break-word;font-family:var(--mono)}
   .grid{display:inline-grid;gap:4px;border:1px dashed #264; padding:6px;border-radius:8px}
   .cell{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:1px solid #244;background:#0b1220;border-radius:4px;font-family:var(--mono)}
+
+  /* Progress bar */
+  .progress{height:10px;background:#0f1b33;border:1px solid #1f2a44;border-radius:999px;overflow:hidden}
+  .bar{height:100%;width:0%;background:linear-gradient(90deg,#22d3ee,#38bdf8);transition:width .1s}
+  .progline{font-size:.8rem;color:var(--muted);margin-top:4px}
 </style>
 </head>
 <body>
 <header>
   <h1>Worträtsel-Solver</h1>
-  <p class="hint">Wähle ein Foto aus der Galerie <em>oder</em> nutze die Kamera. Pinch‑to‑Select für Gitter & Wortliste. Zelle‑für‑Zelle‑OCR für höhere Erkennungsrate.</p>
+  <p class="hint">Ein Tesseract-Worker (Sprache: <b>deu</b>), Whitelist <b>A–Z</b>. Pinch‑to‑Select für Gitter & Wortliste.</p>
 </header>
 
 <div class="wrap">
@@ -51,7 +56,7 @@
       <canvas id="canvas" width="1280" height="960"></canvas>
     </div>
     <div class="overlayTip">
-      <b>Pinch‑to‑Select</b>: zwei Finger auf gegenüberliegende Ecken des Bereichs. Optional: mit einem Finger Rechteck ziehen.
+      <b>Pinch‑to‑Select</b>: Zwei Finger auf gegenüberliegende Ecken des Bereichs. Optional: 1‑Finger ziehen für Feinkorrektur.
     </div>
     <div class="row" style="margin-top:8px">
       <button id="markGrid" type="button">Modus: Gitter</button>
@@ -62,13 +67,18 @@
       <label>Zeilen R <input id="rows" type="number" min="5" max="50" value="13"></label>
       <label>Spalten C <input id="cols" type="number" min="5" max="50" value="13"></label>
     </div>
-    <div id="status">Bereit.</div>
+    <div id="status">Initialisiere OCR …</div>
+
+    <div style="margin-top:10px">
+      <div class="progress"><div id="bar" class="bar"></div></div>
+      <div id="progline" class="progline"></div>
+    </div>
   </section>
 
   <section class="card">
     <h2>2) OCR & Lösung</h2>
     <div class="row">
-      <button id="run" type="button">OCR starten & lösen</button>
+      <button id="run" type="button" disabled>OCR starten & lösen</button>
       <span class="pill" id="progressPill">0%</span>
     </div>
     <div style="margin-top:10px">
@@ -103,12 +113,40 @@ const ctx=canvas.getContext('2d');
 const stage=document.getElementById('stage');
 const statusEl=document.getElementById('status');
 const progressPill=document.getElementById('progressPill');
+const bar=document.getElementById('bar');
+const progline=document.getElementById('progline');
+const runBtn=document.getElementById('run');
 
 let imgBitmap=null;
 let stream=null;
 let rects={grid:null, words:null}, mode='grid';
+let worker=null;
+let workerReady=false;
 
 function setStatus(s, cls=''){ statusEl.className=cls; statusEl.textContent=s; }
+
+// ---------- Init Tesseract (single worker, deu) ----------
+(async function initWorker(){
+  setStatus('Lade Tesseract (deu) …');
+  worker = await Tesseract.createWorker('deu', 1, {
+    logger: m => {
+      if(m.progress!=null){
+        const pct = Math.round(m.progress*100);
+        bar.style.width = pct + '%';
+        progline.textContent = (m.status || 'fortschritt') + ' … ' + pct + '%';
+      }else{
+        progline.textContent = (m.status || '');
+      }
+    },
+    langPath: 'https://tessdata.projectnaptha.com/4.0.0'
+  });
+  await worker.setParameters({
+    'tessedit_char_whitelist':'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  });
+  workerReady = true;
+  setStatus('OCR bereit. Lade oder mache ein Foto.','ok');
+  runBtn.disabled=false;
+})();
 
 // ---------- File (Galerie/Upload) ----------
 fileInput.onchange = async(ev)=>{
@@ -119,7 +157,7 @@ fileInput.onchange = async(ev)=>{
     canvas.width=img.width*scale; canvas.height=img.height*scale;
     ctx.drawImage(img,0,0,canvas.width,canvas.height);
     imgBitmap = await createImageBitmap(img);
-    setStatus('Bild geladen.');
+    setStatus('Bild geladen. Markiere Gitter & Wortliste (Pinch‑to‑Select).');
   };
   img.src=URL.createObjectURL(f);
 };
@@ -146,7 +184,7 @@ snapBtn.onclick = async()=>{
   ctx.drawImage(video,0,0,canvas.width,canvas.height);
   imgBitmap = await createImageBitmap(canvas);
   stopCamera();
-  setStatus('Foto übernommen. Kamera deaktiviert.','ok');
+  setStatus('Foto übernommen. Markiere Gitter & Wortliste (Pinch‑to‑Select).','ok');
 };
 
 closeCamBtn.onclick = ()=>{
@@ -234,31 +272,24 @@ function toBW(source, scale=2, threshold=160){
   return out;
 }
 
-async function ocrSingleChar(cellCanvas){
-  const worker=await Tesseract.createWorker('', 1, { logger:()=>{} });
-  await worker.setParameters({
-    'tessedit_char_whitelist':'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-    'tessedit_pageseg_mode':'10'
-  });
-  const res=await worker.recognize(cellCanvas);
-  await worker.terminate();
-  return (res.data.text||'').trim().toUpperCase().replace(/[^A-Z]/g,'');
-}
-
 async function ocrGridCells(gridRect, R, C){
+  if(!workerReady) throw new Error('Worker nicht bereit');
+  await worker.setParameters({'tessedit_pageseg_mode':'10'}); // single char
   const r=normRect(gridRect);
   const cellW=r.w/C, cellH=r.h/R;
   const grid=[];
   for(let y=0;y<R;y++){
     let row='';
     for(let x=0;x<C;x++){
-      const sx=r.x + x*cellW + cellW*0.2;
-      const sy=r.y + y*cellH + cellH*0.2;
-      const sw=cellW*0.6, sh=cellH*0.6;
+      // 80% inner crop
+      const sx=r.x + x*cellW + cellW*0.1;
+      const sy=r.y + y*cellH + cellH*0.1;
+      const sw=cellW*0.8, sh=cellH*0.8;
       const cell=document.createElement('canvas'); cell.width=sw; cell.height=sh;
       cell.getContext('2d').drawImage(canvas, sx,sy,sw,sh, 0,0,sw,sh);
       const bw = toBW(cell, 2.5, 160);
-      const ch = await ocrSingleChar(bw);
+      const res = await worker.recognize(bw);
+      const ch = (res.data.text||'').trim().toUpperCase().replace(/[^A-Z]/g,'');
       row += ch ? ch[0] : '?';
     }
     grid.push(row);
@@ -267,23 +298,19 @@ async function ocrGridCells(gridRect, R, C){
 }
 
 async function ocrWordList(wordsRect){
+  if(!workerReady) throw new Error('Worker nicht bereit');
+  await worker.setParameters({'tessedit_pageseg_mode':'6'}); // block of text
   const r=normRect(wordsRect);
   const off=document.createElement('canvas'); off.width=r.w; off.height=r.h;
   off.getContext('2d').drawImage(canvas, r.x,r.y,r.w,r.h, 0,0,r.w,r.h);
   const bw = toBW(off, 2.0, 150);
-  const worker=await Tesseract.createWorker('', 1, { logger:()=>{} });
-  await worker.setParameters({
-    'tessedit_char_whitelist':'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-    'tessedit_pageseg_mode':'6'
-  });
-  const res=await worker.recognize(bw);
-  await worker.terminate();
+  const res = await worker.recognize(bw);
   const raw=(res.data.text||'').toUpperCase().replace(/[^A-Z\n ]/g,' ');
   return Array.from(new Set(raw.split(/[\s\n\r]+/).map(s=>s.trim()).filter(s=>s.length>=2)));
 }
 
 // ---------- Solver ----------
-const DIRS=[[0,1],[0,-1],[1,0],[-1,0],[1,1],[1,-1],[1,1],[-1,-1]];
+const DIRS=[[0,1],[0,-1],[1,0],[-1,0],[1,1],[1,-1],[-1,1],[-1,-1]];
 function findWordsInGrid(gridLines, words){
   const R=gridLines.length, C=gridLines[0].length;
   const grid = gridLines.map(r=>r.split(''));
@@ -321,25 +348,30 @@ function leftoverFromHits(gridLines, hits){
   return out;
 }
 
-document.getElementById('run').onclick = async()=>{
-  if(!rects.grid || !rects.words){ setStatus('Bitte Gitter & Wortliste markieren (Pinch‑to‑Select).','warn'); return; }
-  const R=+document.getElementById('rows').value, C=+document.getElementById('cols').value;
-  setStatus('OCR: Gitter (Zelle‑für‑Zelle) …');
-  progressPill.textContent='0%';
-  const grid = await ocrGridCells(rects.grid, R, C);
-  setStatus('OCR: Wortliste …');
-  const words = await ocrWordList(rects.words);
+runBtn.onclick = async()=>{
+  try{
+    if(!rects.grid || !rects.words){ setStatus('Bitte Gitter & Wortliste markieren (Pinch‑to‑Select).','warn'); return; }
+    const R=+document.getElementById('rows').value, C=+document.getElementById('cols').value;
+    setStatus('OCR: Gitter (Zelle‑für‑Zelle) …');
+    progressPill.textContent='0%';
+    const grid = await ocrGridCells(rects.grid, R, C);
+    setStatus('OCR: Wortliste …');
+    const words = await ocrWordList(rects.words);
 
-  const host=document.getElementById('gridOut'); host.innerHTML='';
-  host.style.gridTemplateColumns=`repeat(${grid[0].length}, 1fr)`;
-  host.className='grid';
-  for(const row of grid){ for(const ch of row){ const d=document.createElement('div'); d.className='cell'; d.textContent=ch; host.appendChild(d);}}
-  document.getElementById('wordsOut').textContent = words.join('\\n');
+    const host=document.getElementById('gridOut'); host.innerHTML='';
+    host.style.gridTemplateColumns=`repeat(${grid[0].length}, 1fr)`;
+    host.className='grid';
+    for(const row of grid){ for(const ch of row){ const d=document.createElement('div'); d.className='cell'; d.textContent=ch; host.appendChild(d);}}
+    document.getElementById('wordsOut').textContent = words.join('\\n');
 
-  const found = findWordsInGrid(grid, words);
-  const leftover = leftoverFromHits(grid, found);
-  document.getElementById('leftover').textContent = leftover;
-  setStatus('Fertig.','ok');
+    const found = findWordsInGrid(grid, words);
+    const leftover = leftoverFromHits(grid, found);
+    document.getElementById('leftover').textContent = leftover;
+    setStatus('Fertig.','ok');
+  }catch(err){
+    console.error(err);
+    setStatus('Fehler: '+err.message, 'warn');
+  }
 };
 </script>
 </body>
