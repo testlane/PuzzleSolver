@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>Worträtsel-Solver (Präzise OCR, Pinch-to-Select)</title>
+<title>Worträtsel-Solver (Galerie ODER Kamera, präzise OCR)</title>
 <style>
   :root{--bg:#0b1220;--fg:#e5e7eb;--muted:#9aa4b2;--acc:#22d3ee;--ok:#a7f3d0;--warn:#fbbf24;--mono:ui-monospace,Menlo,Consolas,monospace;}
   html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);}
@@ -23,6 +23,7 @@
   #status.ok{color:var(--ok)} #status.warn{color:var(--warn)}
   #stage{position:relative; border-radius:8px;border:1px solid #1f2a44;background:#000; overflow:hidden; touch-action:none;}
   canvas{display:block;max-width:100%;height:auto}
+  video{width:100%;display:none;border-radius:8px;border:1px solid #1f2a44}
   .overlayTip{font-size:.85rem;color:var(--muted)}
   .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #2a3a57;background:#0b1a33;color:#a5b4fc;font-size:.75rem}
   pre{white-space:pre-wrap;word-break:break-word;font-family:var(--mono)}
@@ -33,20 +34,24 @@
 <body>
 <header>
   <h1>Worträtsel-Solver</h1>
-  <p class="hint">Zelle‑für‑Zelle‑OCR mit harter Whitelist. Pinch‑to‑Select: zwei Finger setzen die Ecken eines Auswahlrechtecks. Browser‑Zoom ist deaktiviert.</p>
+  <p class="hint">Wähle ein Foto aus der Galerie <em>oder</em> nutze die Kamera. Pinch‑to‑Select für Gitter & Wortliste. Zelle‑für‑Zelle‑OCR für höhere Erkennungsrate.</p>
 </header>
 
 <div class="wrap">
   <section class="card">
-    <h2>1) Bild laden</h2>
+    <h2>1) Bildquelle</h2>
     <div class="row">
-      <input id="file" type="file" accept="image/*" capture="environment">
+      <input id="file" type="file" accept="image/*" />
+      <button id="openCam" class="secondary" type="button">Kamera</button>
+      <button id="snap" class="secondary" type="button" disabled>Foto aufnehmen</button>
+      <button id="closeCam" class="secondary" type="button" disabled>Kamera schließen</button>
     </div>
+    <video id="video" playsinline></video>
     <div id="stage">
       <canvas id="canvas" width="1280" height="960"></canvas>
     </div>
     <div class="overlayTip">
-      <b>Pinch‑to‑Select</b>: zwei Finger für die gegenüberliegenden Ecken. Optional: 1‑Finger ziehen für Feinkorrektur.
+      <b>Pinch‑to‑Select</b>: zwei Finger auf gegenüberliegende Ecken des Bereichs. Optional: mit einem Finger Rechteck ziehen.
     </div>
     <div class="row" style="margin-top:8px">
       <button id="markGrid" type="button">Modus: Gitter</button>
@@ -89,6 +94,10 @@ document.addEventListener('gesturechange', e => e.preventDefault());
 document.addEventListener('gestureend', e => e.preventDefault());
 
 const fileInput=document.getElementById('file');
+const openCamBtn=document.getElementById('openCam');
+const snapBtn=document.getElementById('snap');
+const closeCamBtn=document.getElementById('closeCam');
+const video=document.getElementById('video');
 const canvas=document.getElementById('canvas');
 const ctx=canvas.getContext('2d');
 const stage=document.getElementById('stage');
@@ -96,25 +105,68 @@ const statusEl=document.getElementById('status');
 const progressPill=document.getElementById('progressPill');
 
 let imgBitmap=null;
+let stream=null;
 let rects={grid:null, words:null}, mode='grid';
 
-// ---------- Load image ----------
+function setStatus(s, cls=''){ statusEl.className=cls; statusEl.textContent=s; }
+
+// ---------- File (Galerie/Upload) ----------
 fileInput.onchange = async(ev)=>{
   const f=ev.target.files?.[0]; if(!f) return;
+  stopCamera();
   const img = new Image(); img.onload=async()=>{
     const scale=Math.min(1, 2200/img.width);
     canvas.width=img.width*scale; canvas.height=img.height*scale;
     ctx.drawImage(img,0,0,canvas.width,canvas.height);
     imgBitmap = await createImageBitmap(img);
+    setStatus('Bild geladen.');
   };
   img.src=URL.createObjectURL(f);
 };
 
-document.getElementById('markGrid').onclick=()=>{mode='grid'; setStatus('Modus: Gitter. Pinch-to-Select ausführen.');};
-document.getElementById('markWords').onclick=()=>{mode='words'; setStatus('Modus: Wortliste. Pinch-to-Select ausführen.');};
-document.getElementById('clearRects').onclick=()=>{rects={grid:null,words:null}; redraw();};
+// ---------- Camera flow ----------
+openCamBtn.onclick = async()=>{
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    video.srcObject = stream;
+    await video.play();
+    video.style.display='block';
+    snapBtn.disabled=false;
+    closeCamBtn.disabled=false;
+    setStatus('Kamera aktiv – „Foto aufnehmen“ oder „Kamera schließen“.'); 
+  }catch(e){
+    setStatus('Kamera-Fehler: '+e.message,'warn');
+  }
+};
 
-function setStatus(s, cls=''){ statusEl.className=cls; statusEl.textContent=s; }
+snapBtn.onclick = async()=>{
+  if(!video.videoWidth){ return; }
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+  imgBitmap = await createImageBitmap(canvas);
+  stopCamera();
+  setStatus('Foto übernommen. Kamera deaktiviert.','ok');
+};
+
+closeCamBtn.onclick = ()=>{
+  stopCamera();
+  setStatus('Kamera beendet.');
+};
+
+function stopCamera(){
+  try{
+    video.pause();
+    if(stream){ for(const t of stream.getTracks()) t.stop(); }
+  }catch{}
+  stream=null;
+  video.srcObject=null;
+  video.style.display='none';
+  snapBtn.disabled=true;
+  closeCamBtn.disabled=true;
+}
+
+// ---------- Drawing helpers ----------
 function redraw(){
   if(!imgBitmap){ return; }
   ctx.setTransform(1,0,0,1,0,0);
@@ -125,6 +177,10 @@ function redraw(){
 function drawRect(r,color){ if(!r) return; const nr=normRect(r); ctx.save(); ctx.strokeStyle=color; ctx.setLineDash([8,6]); ctx.lineWidth=2; ctx.strokeRect(nr.x,nr.y,nr.w,nr.h); ctx.restore(); }
 function normRect(r){return {x:Math.min(r.x,r.x+r.w), y:Math.min(r.y,r.y+r.h), w:Math.abs(r.w), h:Math.abs(r.h)};}
 function clientToCanvas(x,y){ const b=canvas.getBoundingClientRect(); return {x:(x-b.left)*(canvas.width/b.width), y:(y-b.top)*(canvas.height/b.height)}; }
+
+document.getElementById('markGrid').onclick=()=>{mode='grid'; setStatus('Modus: Gitter. Pinch‑to‑Select ausführen.');};
+document.getElementById('markWords').onclick=()=>{mode='words'; setStatus('Modus: Wortliste. Pinch‑to‑Select ausführen.');};
+document.getElementById('clearRects').onclick=()=>{rects={grid:null,words:null}; redraw(); };
 
 // ---------- Pinch-to-Select ----------
 const touches=new Map();
@@ -161,7 +217,6 @@ stage.addEventListener('pointercancel', endPointer, {passive:false});
 
 // ---------- OCR helpers ----------
 function toBW(source, scale=2, threshold=160){
-  // returns a canvas upscaled & binarized
   const w=Math.max(16, Math.floor(source.width*scale));
   const h=Math.max(16, Math.floor(source.height*scale));
   const out=document.createElement('canvas'); out.width=w; out.height=h;
@@ -170,7 +225,6 @@ function toBW(source, scale=2, threshold=160){
   octx.drawImage(source, 0,0,w,h);
   const id=octx.getImageData(0,0,w,h);
   const d=id.data;
-  // simple contrast stretch + fixed threshold
   for(let i=0;i<d.length;i+=4){
     const g=(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114);
     const v=g>threshold?255:0;
@@ -182,7 +236,6 @@ function toBW(source, scale=2, threshold=160){
 
 async function ocrSingleChar(cellCanvas){
   const worker=await Tesseract.createWorker('', 1, { logger:()=>{} });
-  // psm=10 single char, whitelist A-Z
   await worker.setParameters({
     'tessedit_char_whitelist':'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
     'tessedit_pageseg_mode':'10'
@@ -226,12 +279,11 @@ async function ocrWordList(wordsRect){
   const res=await worker.recognize(bw);
   await worker.terminate();
   const raw=(res.data.text||'').toUpperCase().replace(/[^A-Z\n ]/g,' ');
-  // Break by lines and spaces, keep only 2+ letter tokens
   return Array.from(new Set(raw.split(/[\s\n\r]+/).map(s=>s.trim()).filter(s=>s.length>=2)));
 }
 
 // ---------- Solver ----------
-const DIRS=[[0,1],[0,-1],[1,0],[-1,0],[1,1],[1,-1],[-1,1],[-1,-1]];
+const DIRS=[[0,1],[0,-1],[1,0],[-1,0],[1,1],[1,-1],[1,1],[-1,-1]];
 function findWordsInGrid(gridLines, words){
   const R=gridLines.length, C=gridLines[0].length;
   const grid = gridLines.map(r=>r.split(''));
@@ -278,7 +330,6 @@ document.getElementById('run').onclick = async()=>{
   setStatus('OCR: Wortliste …');
   const words = await ocrWordList(rects.words);
 
-  // Render outputs
   const host=document.getElementById('gridOut'); host.innerHTML='';
   host.style.gridTemplateColumns=`repeat(${grid[0].length}, 1fr)`;
   host.className='grid';
