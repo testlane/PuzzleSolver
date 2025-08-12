@@ -1,108 +1,35 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="de">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>Worträtsel-Solver (DEU, 1 Worker, 80%-Zellen)</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Worträtsel Solver (DEU, Warp, OpenCV.js)</title>
 <style>
-  :root{--bg:#0b1220;--fg:#e5e7eb;--muted:#9aa4b2;--acc:#22d3ee;--ok:#a7f3d0;--warn:#fbbf24;--mono:ui-monospace,Menlo,Consolas,monospace;}
-  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);}
-  header{padding:12px 14px 0;}
-  h1{margin:0 0 6px;font-size:1.2rem}
-  p.hint{margin:4px 0 0;color:var(--muted);font-size:.9rem}
-  .wrap{display:grid;gap:10px;padding:12px 14px}
-  @media(min-width:980px){.wrap{grid-template-columns: 520px 1fr;}}
-  .card{border:1px solid #1f2a44;border-radius:10px;background:#0a1324;padding:12px}
-  .card h2{font-size:1rem;margin:0 0 8px;color:var(--acc)}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  button{appearance:none;border:0;border-radius:999px;padding:10px 14px;font-weight:700;cursor:pointer;background:radial-gradient(100% 100% at 0 0,#0ea5e9 0,#22d3ee 100%);color:#001018}
-  button.secondary{background:#1f2937;color:var(--fg)}
-  input[type="number"],input[type="text"]{width:90px;padding:8px 10px;border-radius:10px;border:1px solid #24314a;background:#0b1220;color:var(--fg)}
-  input[type="file"]{color:var(--fg)}
-  #status{color:var(--muted);font-size:.9rem;margin-top:8px}
-  #status.ok{color:var(--ok)} #status.warn{color:var(--warn)}
-  #stage{position:relative; border-radius:8px;border:1px solid #1f2a44;background:#000; overflow:hidden; touch-action:none;}
-  canvas{display:block;max-width:100%;height:auto}
-  video{width:100%;display:none;border-radius:8px;border:1px solid #1f2a44}
-  .overlayTip{font-size:.85rem;color:var(--muted)}
-  .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #2a3a57;background:#0b1a33;color:#a5b4fc;font-size:.75rem}
-  pre{white-space:pre-wrap;word-break:break-word;font-family:var(--mono)}
-  .grid{display:inline-grid;gap:4px;border:1px dashed #264; padding:6px;border-radius:8px}
-  .cell{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:1px solid #244;background:#0b1220;border-radius:4px;font-family:var(--mono)}
-
-  /* Progress bar */
-  .progress{height:10px;background:#0f1b33;border:1px solid #1f2a44;border-radius:999px;overflow:hidden}
-  .bar{height:100%;width:0%;background:linear-gradient(90deg,#22d3ee,#38bdf8);transition:width .1s}
-  .progline{font-size:.8rem;color:var(--muted);margin-top:4px}
+body { font-family: sans-serif; background: #0b1220; color: #e5e7eb; margin: 0; padding: 0; }
+header { padding: 12px; }
+button { margin: 5px; padding: 10px; border-radius: 5px; cursor: pointer; }
+canvas, video { max-width: 100%; }
+.progress { height:10px;background:#0f1b33;border:1px solid #1f2a44;border-radius:999px;overflow:hidden;margin-top:5px; }
+.bar { height:100%;width:0%;background:linear-gradient(90deg,#22d3ee,#38bdf8);transition:width .1s; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Worträtsel-Solver</h1>
-  <p class="hint">Ein Tesseract-Worker (Sprache: <b>deu</b>), Whitelist <b>A–Z</b>. Pinch‑to‑Select für Gitter & Wortliste.</p>
+<h1>Worträtsel Solver (DEU, Warp, OpenCV.js)</h1>
+<input id="file" type="file" accept="image/*">
+<button id="openCam">Kamera</button>
+<button id="snap" disabled>Foto aufnehmen</button>
+<button id="closeCam" disabled>Kamera schließen</button>
+<div class="progress"><div id="bar" class="bar"></div></div>
+<div id="progline"></div>
 </header>
-
-<div class="wrap">
-  <section class="card">
-    <h2>1) Bildquelle</h2>
-    <div class="row">
-      <input id="file" type="file" accept="image/*" />
-      <button id="openCam" class="secondary" type="button">Kamera</button>
-      <button id="snap" class="secondary" type="button" disabled>Foto aufnehmen</button>
-      <button id="closeCam" class="secondary" type="button" disabled>Kamera schließen</button>
-    </div>
-    <video id="video" playsinline></video>
-    <div id="stage">
-      <canvas id="canvas" width="1280" height="960"></canvas>
-    </div>
-    <div class="overlayTip">
-      <b>Pinch‑to‑Select</b>: Zwei Finger auf gegenüberliegende Ecken des Bereichs. Optional: 1‑Finger ziehen für Feinkorrektur.
-    </div>
-    <div class="row" style="margin-top:8px">
-      <button id="markGrid" type="button">Modus: Gitter</button>
-      <button id="markWords" class="secondary" type="button">Modus: Wortliste</button>
-      <button id="clearRects" class="secondary" type="button">Markierungen löschen</button>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <label>Zeilen R <input id="rows" type="number" min="5" max="50" value="13"></label>
-      <label>Spalten C <input id="cols" type="number" min="5" max="50" value="13"></label>
-    </div>
-    <div id="status">Initialisiere OCR …</div>
-
-    <div style="margin-top:10px">
-      <div class="progress"><div id="bar" class="bar"></div></div>
-      <div id="progline" class="progline"></div>
-    </div>
-  </section>
-
-  <section class="card">
-    <h2>2) OCR & Lösung</h2>
-    <div class="row">
-      <button id="run" type="button" disabled>OCR starten & lösen</button>
-      <span class="pill" id="progressPill">0%</span>
-    </div>
-    <div style="margin-top:10px">
-      <div><strong>Gefundene Wörter:</strong></div>
-      <pre id="wordsOut"></pre>
-    </div>
-    <div>
-      <div><strong>Gitter (erg. OCR):</strong></div>
-      <div id="gridOut"></div>
-    </div>
-    <div style="margin-top:10px">
-      <div><strong>Rest/Lösung:</strong> <span id="leftover" style="font-family:var(--mono)"></span></div>
-    </div>
-  </section>
-</div>
-
+<video id="video" playsinline></video>
+<canvas id="canvas"></canvas>
+<button id="run" disabled>OCR starten & lösen</button>
+<pre id="out"></pre>
 <script src="https://unpkg.com/tesseract.js@v5.0.4/dist/tesseract.min.js"></script>
+<script async src="https://cdn.jsdelivr.net/npm/opencv.js"></script>
 <script>
-// Disable page zoom gestures
-document.addEventListener('wheel', e => { if(e.ctrlKey){ e.preventDefault(); } }, {passive:false});
-document.addEventListener('gesturestart', e => e.preventDefault());
-document.addEventListener('gesturechange', e => e.preventDefault());
-document.addEventListener('gestureend', e => e.preventDefault());
-
 const fileInput=document.getElementById('file');
 const openCamBtn=document.getElementById('openCam');
 const snapBtn=document.getElementById('snap');
@@ -110,268 +37,108 @@ const closeCamBtn=document.getElementById('closeCam');
 const video=document.getElementById('video');
 const canvas=document.getElementById('canvas');
 const ctx=canvas.getContext('2d');
-const stage=document.getElementById('stage');
-const statusEl=document.getElementById('status');
-const progressPill=document.getElementById('progressPill');
+const runBtn=document.getElementById('run');
+const out=document.getElementById('out');
 const bar=document.getElementById('bar');
 const progline=document.getElementById('progline');
-const runBtn=document.getElementById('run');
-
-let imgBitmap=null;
 let stream=null;
-let rects={grid:null, words:null}, mode='grid';
 let worker=null;
-let workerReady=false;
 
-function setStatus(s, cls=''){ statusEl.className=cls; statusEl.textContent=s; }
-
-// ---------- Init Tesseract (single worker, deu) ----------
-(async function initWorker(){
-  setStatus('Lade Tesseract (deu) …');
-  worker = await Tesseract.createWorker('deu', 1, {
-    logger: m => {
-      if(m.progress!=null){
-        const pct = Math.round(m.progress*100);
-        bar.style.width = pct + '%';
-        progline.textContent = (m.status || 'fortschritt') + ' … ' + pct + '%';
-      }else{
-        progline.textContent = (m.status || '');
-      }
-    },
-    langPath: 'https://tessdata.projectnaptha.com/4.0.0'
-  });
-  await worker.setParameters({
-    'tessedit_char_whitelist':'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-  });
-  workerReady = true;
-  setStatus('OCR bereit. Lade oder mache ein Foto.','ok');
-  runBtn.disabled=false;
-})();
-
-// ---------- File (Galerie/Upload) ----------
-fileInput.onchange = async(ev)=>{
-  const f=ev.target.files?.[0]; if(!f) return;
-  stopCamera();
-  const img = new Image(); img.onload=async()=>{
-    const scale=Math.min(1, 2200/img.width);
-    canvas.width=img.width*scale; canvas.height=img.height*scale;
-    ctx.drawImage(img,0,0,canvas.width,canvas.height);
-    imgBitmap = await createImageBitmap(img);
-    setStatus('Bild geladen. Markiere Gitter & Wortliste (Pinch‑to‑Select).');
+fileInput.onchange=e=>{
+  const f=e.target.files[0];
+  if(!f)return;
+  const img=new Image();
+  img.onload=()=>{
+    canvas.width=img.width;canvas.height=img.height;
+    ctx.drawImage(img,0,0);
+    runBtn.disabled=false;
   };
   img.src=URL.createObjectURL(f);
 };
-
-// ---------- Camera flow ----------
-openCamBtn.onclick = async()=>{
-  try{
-    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-    video.srcObject = stream;
-    await video.play();
-    video.style.display='block';
-    snapBtn.disabled=false;
-    closeCamBtn.disabled=false;
-    setStatus('Kamera aktiv – „Foto aufnehmen“ oder „Kamera schließen“.'); 
-  }catch(e){
-    setStatus('Kamera-Fehler: '+e.message,'warn');
-  }
+openCamBtn.onclick=async()=>{
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+  video.srcObject=stream; video.style.display='block';
+  await video.play();
+  snapBtn.disabled=false; closeCamBtn.disabled=false;
+};
+snapBtn.onclick=()=>{
+  canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+  ctx.drawImage(video,0,0);
+};
+closeCamBtn.onclick=()=>{
+  if(stream){stream.getTracks().forEach(t=>t.stop());}
+  video.pause(); video.srcObject=null;
 };
 
-snapBtn.onclick = async()=>{
-  if(!video.videoWidth){ return; }
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  ctx.drawImage(video,0,0,canvas.width,canvas.height);
-  imgBitmap = await createImageBitmap(canvas);
-  stopCamera();
-  setStatus('Foto übernommen. Markiere Gitter & Wortliste (Pinch‑to‑Select).','ok');
-};
-
-closeCamBtn.onclick = ()=>{
-  stopCamera();
-  setStatus('Kamera beendet.');
-};
-
-function stopCamera(){
-  try{
-    video.pause();
-    if(stream){ for(const t of stream.getTracks()) t.stop(); }
-  }catch{}
-  stream=null;
-  video.srcObject=null;
-  video.style.display='none';
-  snapBtn.disabled=true;
-  closeCamBtn.disabled=true;
+async function initWorker(){
+  worker=Tesseract.createWorker('deu',1,{
+    logger:m=>{
+      if(m.status==='recognizing text'){ bar.style.width=Math.round(m.progress*100)+'%'; }
+      if(m.status==='loading language' || m.status==='initializing tesseract'){ progline.textContent=m.status+' '+Math.round(m.progress*100)+'%'; }
+    }
+  });
+  await worker.setParameters({
+    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  });
 }
 
-// ---------- Drawing helpers ----------
-function redraw(){
-  if(!imgBitmap){ return; }
-  ctx.setTransform(1,0,0,1,0,0);
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  ctx.drawImage(imgBitmap,0,0,canvas.width,canvas.height);
-  drawRect(rects.grid,'#22d3ee'); drawRect(rects.words,'#a7f3d0');
-}
-function drawRect(r,color){ if(!r) return; const nr=normRect(r); ctx.save(); ctx.strokeStyle=color; ctx.setLineDash([8,6]); ctx.lineWidth=2; ctx.strokeRect(nr.x,nr.y,nr.w,nr.h); ctx.restore(); }
-function normRect(r){return {x:Math.min(r.x,r.x+r.w), y:Math.min(r.y,r.y+r.h), w:Math.abs(r.w), h:Math.abs(r.h)};}
-function clientToCanvas(x,y){ const b=canvas.getBoundingClientRect(); return {x:(x-b.left)*(canvas.width/b.width), y:(y-b.top)*(canvas.height/b.height)}; }
-
-document.getElementById('markGrid').onclick=()=>{mode='grid'; setStatus('Modus: Gitter. Pinch‑to‑Select ausführen.');};
-document.getElementById('markWords').onclick=()=>{mode='words'; setStatus('Modus: Wortliste. Pinch‑to‑Select ausführen.');};
-document.getElementById('clearRects').onclick=()=>{rects={grid:null,words:null}; redraw(); };
-
-// ---------- Pinch-to-Select ----------
-const touches=new Map();
-let singleDrag=null;
-stage.addEventListener('pointerdown', (e)=>{
-  stage.setPointerCapture(e.pointerId);
-  touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  if(touches.size===1){
-    const p=clientToCanvas(e.clientX,e.clientY);
-    singleDrag={start:p,key:mode};
-    rects[mode]={x:p.x,y:p.y,w:0,h:0};
-    redraw();
-  }
-  e.preventDefault();
-},{passive:false});
-stage.addEventListener('pointermove', (e)=>{
-  if(!touches.has(e.pointerId)) return;
-  touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  if(touches.size===2){
-    const pts=[...touches.values()].map(p=>clientToCanvas(p.x,p.y));
-    rects[mode]={x:pts[0].x,y:pts[0].y,w:pts[1].x-pts[0].x,h:pts[1].y-pts[0].y};
-    redraw();
-  }else if(touches.size===1 && singleDrag){
-    const p=clientToCanvas(e.clientX,e.clientY);
-    rects[singleDrag.key].w=p.x-singleDrag.start.x;
-    rects[singleDrag.key].h=p.y-singleDrag.start.y;
-    redraw();
-  }
-  e.preventDefault();
-},{passive:false});
-function endPointer(e){ touches.delete(e.pointerId); singleDrag=null; }
-stage.addEventListener('pointerup', endPointer, {passive:false});
-stage.addEventListener('pointercancel', endPointer, {passive:false});
-
-// ---------- OCR helpers ----------
-function toBW(source, scale=2, threshold=160){
-  const w=Math.max(16, Math.floor(source.width*scale));
-  const h=Math.max(16, Math.floor(source.height*scale));
-  const out=document.createElement('canvas'); out.width=w; out.height=h;
-  const octx=out.getContext('2d');
-  octx.imageSmoothingEnabled=true;
-  octx.drawImage(source, 0,0,w,h);
-  const id=octx.getImageData(0,0,w,h);
-  const d=id.data;
-  for(let i=0;i<d.length;i+=4){
-    const g=(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114);
-    const v=g>threshold?255:0;
-    d[i]=d[i+1]=d[i+2]=v; d[i+3]=255;
-  }
-  octx.putImageData(id,0,0);
-  return out;
+function getMinAreaRectPoints(points){
+  let mat=new cv.Mat(points.length,1,cv.CV_32FC2);
+  for(let i=0;i<points.length;i++){ mat.data32F[i*2]=points[i].x; mat.data32F[i*2+1]=points[i].y; }
+  let rotatedRect=cv.minAreaRect(mat);
+  let vertices=cv.RotatedRect.points(rotatedRect);
+  mat.delete();
+  return vertices.map(v=>({x:v.x,y:v.y}));
 }
 
-async function ocrGridCells(gridRect, R, C){
-  if(!workerReady) throw new Error('Worker nicht bereit');
-  await worker.setParameters({'tessedit_pageseg_mode':'10'}); // single char
-  const r=normRect(gridRect);
-  const cellW=r.w/C, cellH=r.h/R;
-  const grid=[];
-  for(let y=0;y<R;y++){
+function warpImage(srcCanvas, quad, outW, outH){
+  let src=cv.imread(srcCanvas);
+  let dst=new cv.Mat();
+  let srcTri=cv.matFromArray(4,1,cv.CV_32FC2,[quad[0].x,quad[0].y,quad[1].x,quad[1].y,quad[2].x,quad[2].y,quad[3].x,quad[3].y]);
+  let dstTri=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,outW,0,outW,outH,0,outH]);
+  let M=cv.getPerspectiveTransform(srcTri,dstTri);
+  cv.warpPerspective(src,dst,M,new cv.Size(outW,outH));
+  src.delete(); srcTri.delete(); dstTri.delete(); M.delete();
+  cv.imshow(srcCanvas,dst);
+  dst.delete();
+}
+
+runBtn.onclick=async()=>{
+  out.textContent='Starte OCR...';
+  if(!worker){ await initWorker(); }
+
+  // 1) Vor-OCR pass to find bounding boxes
+  const {data:{symbols}}=await worker.recognize(canvas,{ tessedit_pageseg_mode:6 });
+  const pts=symbols.map(s=>({x:(s.bbox.x0+s.bbox.x1)/2,y:(s.bbox.y0+s.bbox.y1)/2}));
+  if(pts.length<4){ out.textContent='Zu wenige Punkte erkannt.'; return; }
+
+  // 2) Min area rect with OpenCV.js
+  const quad=getMinAreaRectPoints(pts);
+
+  // 3) Warp to grid size
+  let R=13,C=13; // TODO: dynamisch
+  let cellW=50,cellH=50;
+  warpImage(canvas,quad,C*cellW,R*cellH);
+
+  // 4) Cell-by-cell OCR
+  let resultGrid=[];
+  for(let r=0;r<R;r++){
     let row='';
-    for(let x=0;x<C;x++){
-      // 80% inner crop
-      const sx=r.x + x*cellW + cellW*0.1;
-      const sy=r.y + y*cellH + cellH*0.1;
-      const sw=cellW*0.8, sh=cellH*0.8;
-      const cell=document.createElement('canvas'); cell.width=sw; cell.height=sh;
-      cell.getContext('2d').drawImage(canvas, sx,sy,sw,sh, 0,0,sw,sh);
-      const bw = toBW(cell, 2.5, 160);
-      const res = await worker.recognize(bw);
-      const ch = (res.data.text||'').trim().toUpperCase().replace(/[^A-Z]/g,'');
-      row += ch ? ch[0] : '?';
+    for(let c=0;c<C;c++){
+      let x=c*cellW+cellW*0.05;
+      let y=r*cellH+cellH*0.05;
+      let w=cellW*0.9;
+      let h=cellH*0.9;
+      let cell=ctx.getImageData(x,y,w,h);
+      let cellCanvas=document.createElement('canvas');
+      cellCanvas.width=w; cellCanvas.height=h;
+      cellCanvas.getContext('2d').putImageData(cell,0,0);
+      const {data:{text}}=await worker.recognize(cellCanvas,{ tessedit_pageseg_mode:10 });
+      row+=text.trim().charAt(0) || '?';
     }
-    grid.push(row);
+    resultGrid.push(row);
   }
-  return grid;
-}
-
-async function ocrWordList(wordsRect){
-  if(!workerReady) throw new Error('Worker nicht bereit');
-  await worker.setParameters({'tessedit_pageseg_mode':'6'}); // block of text
-  const r=normRect(wordsRect);
-  const off=document.createElement('canvas'); off.width=r.w; off.height=r.h;
-  off.getContext('2d').drawImage(canvas, r.x,r.y,r.w,r.h, 0,0,r.w,r.h);
-  const bw = toBW(off, 2.0, 150);
-  const res = await worker.recognize(bw);
-  const raw=(res.data.text||'').toUpperCase().replace(/[^A-Z\n ]/g,' ');
-  return Array.from(new Set(raw.split(/[\s\n\r]+/).map(s=>s.trim()).filter(s=>s.length>=2)));
-}
-
-// ---------- Solver ----------
-const DIRS=[[0,1],[0,-1],[1,0],[-1,0],[1,1],[1,-1],[-1,1],[-1,-1]];
-function findWordsInGrid(gridLines, words){
-  const R=gridLines.length, C=gridLines[0].length;
-  const grid = gridLines.map(r=>r.split(''));
-  function inb(r,c){return r>=0&&r<R&&c>=0&&c<C}
-  function exists(w){
-    const L=w.length;
-    for(let r=0;r<R;r++)for(let c=0;c<C;c++){
-      for(const [dr,dc] of DIRS){
-        let rr=r, cc=c, ok=true;
-        for(let k=0;k<L;k++){ if(!inb(rr,cc)||grid[rr][cc]!==w[k]){ok=false;break;} rr+=dr; cc+=dc; }
-        if(ok) return true;
-      }
-    }
-    return false;
-  }
-  return words.filter(w=>w && exists(w));
-}
-function leftoverFromHits(gridLines, hits){
-  const R=gridLines.length, C=gridLines[0].length;
-  const grid = gridLines.map(r=>r.split(''));
-  const mark = Array.from({length:R},()=>Array(C).fill(false));
-  function inb(r,c){return r>=0&&r<R&&c>=0&&c<C}
-  function markWord(w){
-    const L=w.length;
-    for(let r=0;r<R;r++)for(let c=0;c<C;c++){
-      for(const [dr,dc] of DIRS){
-        let rr=r, cc=c, ok=true;
-        for(let k=0;k<L;k++){ if(!inb(rr,cc)||grid[rr][cc]!==w[k]){ok=false;break;} rr+=dr; cc+=dc; }
-        if(ok){ rr=r; cc=c; for(let k=0;k<L;k++){ mark[rr][cc]=true; rr+=dr; cc+=dc; } }
-      }
-    }
-  }
-  for(const w of hits) markWord(w);
-  let out=''; for(let r=0;r<R;r++)for(let c=0;c<C;c++) if(!mark[r][c]) out+=grid[r][c];
-  return out;
-}
-
-runBtn.onclick = async()=>{
-  try{
-    if(!rects.grid || !rects.words){ setStatus('Bitte Gitter & Wortliste markieren (Pinch‑to‑Select).','warn'); return; }
-    const R=+document.getElementById('rows').value, C=+document.getElementById('cols').value;
-    setStatus('OCR: Gitter (Zelle‑für‑Zelle) …');
-    progressPill.textContent='0%';
-    const grid = await ocrGridCells(rects.grid, R, C);
-    setStatus('OCR: Wortliste …');
-    const words = await ocrWordList(rects.words);
-
-    const host=document.getElementById('gridOut'); host.innerHTML='';
-    host.style.gridTemplateColumns=`repeat(${grid[0].length}, 1fr)`;
-    host.className='grid';
-    for(const row of grid){ for(const ch of row){ const d=document.createElement('div'); d.className='cell'; d.textContent=ch; host.appendChild(d);}}
-    document.getElementById('wordsOut').textContent = words.join('\\n');
-
-    const found = findWordsInGrid(grid, words);
-    const leftover = leftoverFromHits(grid, found);
-    document.getElementById('leftover').textContent = leftover;
-    setStatus('Fertig.','ok');
-  }catch(err){
-    console.error(err);
-    setStatus('Fehler: '+err.message, 'warn');
-  }
+  out.textContent=resultGrid.map(r=>r.split('').join(' ')).join('\n');
 };
 </script>
 </body>
